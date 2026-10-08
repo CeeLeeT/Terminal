@@ -1,35 +1,76 @@
-## Welcome to # Terminal
-____________________________________________________________________________________________________________________
+# GeekStation Terminal
 
-You can use the [editor on GitHub](https://github.com/CeeLeeT/CeeLeeT.github.io/edit/main/README.md) to maintain and preview the content for your website in Markdown files.
+Wiederverwendbares Backend für Terminal-Aufträge und CLI-Agenten in Office und Habibis.
 
-Whenever you commit to this repository, GitHub Pages will run [Jekyll](https://jekyllrb.com/) to rebuild the pages in your site, from the content in your Markdown files.
-____________________________________________________________________________________________________________________
+## Aktueller Stand
 
-### Markdown
+Der erste Backend-Prototyp bietet eine lokale HTTP-API, echte Prozessausführung,
+SQLite-Verläufe und Live-Ausgabe über Server-Sent Events (SSE).
+Eine Weboberfläche und die vorhandene Agenteninstallation sind noch nicht angeschlossen.
 
-Markdown is a lightweight and easy-to-use syntax for styling your writing. It includes conventions for
+Vorhanden:
+- Empfangsbestätigung mit Auftrags-ID und echtem Status.
+- Diagnosevorlage und konfigurierbarer CLI-Adapter ohne Shell-Interpolation.
+- Gespeicherte Ausgabe, Exit-Code, Timeout und Neustarterkennung.
+- Token-Schutz für alle Endpunkte, Bindung ausschließlich an localhost.
 
-```markdown
-Syntax highlighted code block
+Geplant:
+- Schließbare Terminal-/Chat-Reiter, Agentenstatus und Jobvorlagen.
+- Integration vorhandener Office-/Habibis-Agenten und Zugriff auf R2D2.
+- Agentenaustausch, Sprachsteuerung, Stummschaltung und WAV-Aufzeichnung.
+- Interaktives PTY-Terminal, Abbruch laufender Jobs und Mehrbenutzerbetrieb.
 
-# Header 1
-## Header 2
-### Header 3
+## Start
 
-- Bulleted
-- List
+Python 3.11 oder neuer, keine zusätzlichen Pakete nötig:
 
-1. Numbered
-2. List
-
-**Bold** and _Italic_ and `Code` text
-
-[Link](url) and ![Image](src)
+```bash
+export TERMINAL_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+python -m backend.server
 ```
-____________________________________________________________________________________________________________________
-For more details see [GitHub Flavored Markdown](https://guides.github.com/features/mastering-markdown/).
-### Jekyll Themes
-Your Pages site will use the layout and styles from the Jekyll theme you have selected in your [repository settings](https://github.com/CeeLeeT/CeeLeeT.github.io/settings). The name of this theme is saved in the Jekyll `_config.yml` configuration file.
-### Support or Contact
-Having trouble with Pages? Check out our [documentation](https://docs.github.com/categories/github-pages-basics/) or [contact support](https://support.github.com/contact) and we’ll help you sort it out.
+
+Der Server läuft unter `http://127.0.0.1:8765`. Der Token gehört nicht ins Repository.
+Daten: `data/terminal.sqlite3`; mit `TERMINAL_DATA_DIR` anderen dauerhaften Ordner wählen.
+`.env.example` dokumentiert Variablen; die Datei wird nicht automatisch geladen.
+
+```bash
+curl -H "Authorization: Bearer $TERMINAL_API_TOKEN" http://127.0.0.1:8765/templates
+curl -H "Authorization: Bearer $TERMINAL_API_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"template":"diagnostics","prompt":""}' http://127.0.0.1:8765/jobs
+```
+
+`GET /jobs`: Verlauf; `GET /jobs/ID`: Status und Ergebnis-Metadaten;
+`GET /jobs/ID/events`: Live-Ausgabe und gespeicherte Ereignisse.
+`Last-Event-ID` setzt einen unterbrochenen Stream fort.
+Clients benötigen Header-Unterstützung, beispielsweise Streaming-Fetch.
+
+## CLI-Agent anschließen
+
+`TERMINAL_AGENT_ARGV` ist ein JSON-Array des tatsächlichen CLI-Aufrufs.
+Genau ein Argument muss `{prompt}` lauten und wird durch den Auftrag ersetzt.
+Strukturbeispiel: `["/pfad/zur/cli", "nicht-interaktiver-modus", "{prompt}"]`.
+Die realen Argumente müssen an der vorhandenen Installation geprüft werden.
+Ohne Konfiguration steht nur die Diagnosevorlage bereit.
+`TERMINAL_WORKDIR` bestimmt das Arbeitsverzeichnis des Prozesses.
+
+Der Adapter vergibt keine zusätzlichen Rechte; Prozesse laufen mit den Rechten
+seines Serverkontos. Für Dienst- und Fernbetrieb fehlen noch kontrollierter
+HTTPS-Zugang, ein geeignetes Dienstkonto, Backup und Aufbewahrungsregeln.
+GitHub Pages allein kann dieses Backend nicht ausführen.
+
+## Struktur
+
+| Pfad | Inhalt |
+|---|---|
+| `backend/` | HTTP-API, Prozessadapter, SQLite-Speicher |
+| `frontend/` | Nächster UI-Meilenstein, noch keine Oberfläche |
+| `docs/architecture.md` | Schnittstellen und Grenzen |
+| `tests/` | Prozesse, Speicherung, Fehlerfälle und HTTP-/SSE-Ablauf |
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Nächster Meilenstein: vorhandene Agenten-CLI anschließen und den vollständigen
+Auftragsablauf über eine Weboberfläche bedienen. Vorhandene Office-/Habibis-Dateien
+waren bei dieser Umsetzung nicht verfügbar; ihre Integration bleibt offen.
