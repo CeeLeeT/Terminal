@@ -6,7 +6,7 @@ Lokales Backend für nachvollziehbare Terminal-Aufträge und die spätere Anbind
 
 Stand: 11. Oktober 2026. Auf `main` liegen bislang die README und `_config.yml` für GitHub Pages. Der Backend-Prototyp befindet sich im **offenen Draft-[PR #1](https://github.com/CeeLeeT/Terminal/pull/1)** auf `feat/terminal-job-api`; er ist noch nicht in `main` integriert.
 
-Die folgenden Angaben zu Einrichtung und API beschreiben den geprüften Quellstand `5d056a5a2bfd90c596277ea5956278801aff32e2` dieses PRs. Auf `main` allein funktionieren die Backend-Befehle noch nicht. Nach Änderungen am PR müssen diese Angaben erneut abgeglichen werden.
+Die folgenden Angaben zu Einrichtung und API beschreiben den geprüften Quellstand `a9aa6eeecd839f790e3b8d16ae8d0ff258b710ce` dieses PRs. Auf `main` allein funktionieren die Backend-Befehle noch nicht. Nach Änderungen am PR müssen diese Angaben erneut abgeglichen werden.
 
 | Bereich | Stand |
 |---|---|
@@ -23,7 +23,7 @@ GitHub Pages kann Dokumentation ausliefern, aber dieses Python-Backend nicht aus
 
 Eine Python-Serverinstanz nimmt authentifizierte HTTP-Aufträge an. `backend/jobs.py` speichert Auftrag und Ereignisse in SQLite und startet pro Auftrag einen Prozess. `backend/server.py` liefert Status und gespeicherte oder neue Ausgabe über HTTP beziehungsweise Server-Sent Events (SSE).
 
-Der Prozess erhält einzelne Argumente ohne Shell-Interpolation. Standardausgabe und Fehlerausgabe werden zusammengeführt und als UTF-8 mit Ersatz für ungültige Zeichen gespeichert. Es gibt weder PTY noch offene Standardeingabe; interaktive Rückfragen eines CLI-Agenten werden damit nicht unterstützt.
+Der Prozess erhält einzelne Argumente ohne Shell-Interpolation. Registrierte Prozessgruppen werden beim geordneten Serverende (SIGTERM/Strg+C) beendet und die Job-Threads abgeschlossen. Standardausgabe und Fehlerausgabe werden zusammengeführt und als UTF-8 mit Ersatz für ungültige Zeichen gespeichert. Es gibt weder PTY noch offene Standardeingabe; interaktive Rückfragen eines CLI-Agenten werden damit nicht unterstützt.
 
 Aufträge wechseln von `queued` zu `running`, danach zu `completed`, `failed` oder `timed_out`. Beim Initialisieren der Jobverwaltung werden zuvor aktive Aufträge als `interrupted` markiert. Sie werden nicht automatisch erneut ausgeführt. Die Daten sind persistent; die Ausführung selbst ist keine dauerhafte Warteschlange mit Wiederanlaufgarantie.
 
@@ -47,7 +47,7 @@ Diese Pfade sind im Backend-Draft vorhanden; auf `main` bislang nur README und J
 
 ## Lokale Einrichtung
 
-Für den Prototyp ist Python 3.11 oder neuer vorgesehen; verwendet wird ausschließlich die Standardbibliothek. Die tatsächlich unterstützten Betriebssysteme und Python-Versionen müssen auf den Zielgeräten noch bestätigt werden.
+Für den sicheren Prototyp sind Linux/macOS (POSIX) und Python 3.11 oder neuer vorgesehen; verwendet wird ausschließlich die Standardbibliothek. Windows wird bis zur Umsetzung sicherer ACLs und Prozessbaum-Verwaltung abgewiesen. Die Tests bestanden unter Linux/Python 3.12; die tatsächlichen Zielgeräte müssen noch geprüft werden.
 
 1. Repository klonen und den Backend-Branch auschecken:
 
@@ -72,6 +72,8 @@ Der Server bindet fest an `http://127.0.0.1:8765`. Beide Werte sind derzeit nich
 | `TERMINAL_DATA_DIR` | Datenordner, standardmäßig `data`; Datenbank `terminal.sqlite3` |
 | `TERMINAL_WORKDIR` | Arbeitsverzeichnis der Kindprozesse, standardmäßig `.` |
 | `TERMINAL_AGENT_ARGV` | Optionales JSON-Array des CLI-Aufrufs; ohne Konfiguration nur `diagnostics` |
+
+Datenordner werden mit 0700 und Datenbanken mit 0600 geschützt; vorhandene Rechte werden korrigiert. Fremde Eigentümer und Symlinks sowie Datenbank-Hardlinks werden abgewiesen. SQLite-Journale übernehmen die Datenbankrechte.
 
 Relative Datenpfade beziehen sich auf das Startverzeichnis. Für dauerhaften Betrieb einen festen Datenpfad und ein vorhandenes, bewusst gewähltes Arbeitsverzeichnis verwenden. `.env.example` dient als Vorlage; Kopieren nach `.env` allein setzt keine Variablen.
 
@@ -121,6 +123,9 @@ Browser-Clients brauchen Streaming-Fetch oder einen anderen Client mit Unterstü
 | Request-Body | Maximal 65.536 Byte; gültiger `Content-Length` erforderlich |
 | Prompt | Maximal 16.000 Zeichen; für `agent` nicht leer oder nur Leerraum |
 | Laufzeit | Standardmäßig 120 Sekunden je Auftrag |
+| HTTP-Verbindungen | Maximal 16 aktive Verbindungen; weitere werden vor Threadstart geschlossen, Backlog 16 |
+| Header / Body | Absolute Frist von zehn Sekunden |
+| SSE | Absolute Frist von 150 Sekunden; danach mit `Last-Event-ID` wieder verbinden |
 | Ausgabe | Maximal 1 MiB gelesene Prozessausgabe je Auftrag; Überschreitung beendet den Prozess und führt zu `failed` |
 
 Laufzeit, Parallelität und Ausgabelimit sind derzeit keine Umgebungsvariablen. Es gibt noch keine Idempotenzschlüssel, Abbruch-API oder strukturierte Agentenergebnisse. Ein erneut gesendetes `POST /jobs` erzeugt einen neuen Auftrag.
@@ -129,14 +134,14 @@ Laufzeit, Parallelität und Ausgabelimit sind derzeit keine Umgebungsvariablen. 
 
 Der Prototyp ist für lokale Erprobung vorgesehen. Loopback-Bindung und Bearer-Token begrenzen den API-Zugang, sind aber keine Sandbox für die gestarteten Prozesse.
 
-- Agenten laufen mit den Rechten des Serverkontos und erben dessen Umgebung. Werkzeuge, Dateien, Netzwerkzugriffe und Geheimnisse müssen separat begrenzt werden. Nicht als root betreiben.
+- Agenten laufen mit den Rechten des Serverkontos und erben dessen Umgebung mit Ausnahme von `TERMINAL_API_TOKEN`. Werkzeuge, Dateien, Netzwerkzugriffe und Geheimnisse müssen separat begrenzt werden. Nicht als root betreiben.
 - Die wörtliche Prompt-Übergabe verhindert Shell-Interpolation im Adapter. Sie verhindert nicht, dass ein Agent selbst Befehle ausführt oder Dateien verändert.
 - Ein gemeinsamer Token erlaubt Zugriff auf sämtliche Aufträge und Prompts. Benutzertrennung, Rollen, Token-Rotation im laufenden Server und Audit-Protokoll fehlen.
 - SQLite enthält Prompts und Ausgaben unverschlüsselt. Automatische Löschung, Gesamtgrößenlimit und Backup-/Restore-Verfahren fehlen. Keine Zugangsdaten in Prompts schreiben.
-- Unter POSIX beendet der Timeout die Prozessgruppe; unter Windows nur den direkten Prozess. Ein Serverneustart markiert Aufträge als unterbrochen, garantiert aber nicht die Beendigung bereits gestarteter Kindprozesse.
-- HTTPS, Browser-Sicherheitskonzept und Schutz gegen Ressourcenmissbrauch sind noch nicht vollständig umgesetzt. Den Port nicht unmittelbar im Internet veröffentlichen.
+- Timeout und geordnetes Serverende bereinigen registrierte Prozessgruppen. SIGKILL, Stromausfall und absichtlich aus der Prozessgruppe ausbrechende Prozesse brauchen zusätzliche Prozessverwaltung. Ein Neustart allein erkennt keine verwaisten Prozesse.
+- HTTP-Verbindungen und Fristen sind begrenzt; HTTPS, Browser-Sicherheitskonzept und umfassende Schutzmaßnahmen für Fernzugriff bleiben offen. Den Port nicht unmittelbar im Internet veröffentlichen.
 
-Vor Dienst- oder Fernbetrieb sind ein eingeschränktes Dienstkonto, kontrollierter Zugang, Supervisor samt Prozessbereinigung, Backup und Aufbewahrungsregeln umzusetzen und zu prüfen.
+Vor Dienst- oder Fernbetrieb sind ein eingeschränktes Dienstkonto, kontrollierter Zugang, Supervisor für harte Abbrüche und ausbrechende Prozesse, Backup und Aufbewahrungsregeln umzusetzen und zu prüfen.
 
 ## Geplante GeeKStation-Agenten-Anbindung
 
@@ -160,7 +165,7 @@ R2D2-Zugriff, Agentenauswahl, Sprachsteuerung und interaktive Terminals sind wei
 | Speicher | Dauerhafter Datenpfad, Dateirechte, Speicherbedarf, Aufbewahrung und erfolgreich getestetes Restore |
 | Frontend-Vertrag | Vorhandene GeeKStation-/Office-/Habibis-Dateien, Origin, Authentifizierung und Zuordnung der Job-IDs |
 | Stream-Verhalten | Ausgabe ohne störende Pufferung, Wiederaufnahme und Darstellung von Fehlern/Unterbrechungen |
-| Prozessverwaltung | Verhalten bei Timeout, Serverende und Neustart einschließlich Kindprozessen auf dem Zielsystem |
+| Prozessverwaltung | Automatisierte Tests für Timeout, SIGTERM und Kindprozess-Bereinigung bestanden; Verhalten auf dem tatsächlichen Zielsystem und bei harten Abbrüchen prüfen |
 | Fernzugriff | Ob benötigt; erst danach HTTPS-/Proxy-Konzept und Zugangsregeln festlegen |
 | R2D2 | Ob benötigt; konkrete Freigaben, Protokoll und eingeschränkter Zugang prüfen |
 | Pages / Dokumentation | Zweck der verbliebenen Jekyll-Konfiguration und Dokumentationsveröffentlichung klären |
@@ -170,3 +175,7 @@ R2D2-Zugriff, Agentenauswahl, Sprachsteuerung und interaktive Terminals sind wei
 Zuerst Backend-Basis und tatsächlichen CLI-Vertrag bestätigen und die Architektur-Dokumentation damit abgleichen. Danach einen vollständigen, harmlosen Agentenauftrag über die vorhandene API ausführen. Auf dieser geprüften Schnittstelle kann eine minimale Weboberfläche für Auftragseingabe, Status, Live-Ausgabe und Verlauf entstehen.
 
 Diese README ersetzt die allgemeine GitHub-Pages-Vorlage. Beim späteren Zusammenführen von PR #1 muss sie als Projektdokumentation erhalten bleiben; der dortige kürzere README-Entwurf darf den getrennten Projektstand und die Verifikationsliste nicht überschreiben.
+
+## Sicherheitskorrekturen
+
+Die vier Befunde der ersten Prüfung wurden im Backend-PR #1 korrigiert: Dateirechte, geordnetes Beenden von Prozessgruppen, HTTP-Ressourcengrenzen und Ignore-Regeln für lokale Umgebungsdateien/Datenbanken. Zusätzlich erhalten Kindprozesse den API-Token nicht mehr. Alle 15 Funktionstests und Sicherheits-/Regressionstests bestanden. Der [Prüfbericht](docs/security-review-2026-10-11.md) beschreibt den ursprünglichen Stand und den aktuellen Korrekturstatus.
