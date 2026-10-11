@@ -2,6 +2,9 @@
 
 Stand: 11. Oktober 2026. Prüfung des öffentlichen Repositorys CeeLeeT/Terminal.
 
+
+> Korrekturstatus: S1–S4 wurden am 11. Oktober 2026 in Backend-Commit `a9aa6eeecd839f790e3b8d16ae8d0ff258b710ce` ([PR #1](https://github.com/CeeLeeT/Terminal/pull/1)) behoben. 15 Tests bestanden: Dateirechte/Journale, Ablehnung unsicherer Links, Prozessgruppen-Bereinigung und echter SIGTERM-Servertest, HTTP-Limits/Fristen, SSE-Wiederaufnahme und Ignore-Regeln. Der API-Token wird nicht mehr an Kindprozesse vererbt. Sichere Laufzeit derzeit nur POSIX; Windows wird abgewiesen. SIGKILL/Stromausfall und ausbrechende Prozesse erfordern weiterhin einen Supervisor. Die nachfolgende Prüfung bleibt als Dokumentation des ursprünglichen Befunds erhalten.
+
 ## Umfang und Methode
 
 Geprüft wurden alle Dateien von `main` (9b1c212), `feat/terminal-job-api` (5d056a5) und `docs/terminal-readme` (0c436f3), außerdem alle über diese Git-Referenzen erreichbaren früheren Dateiversionen einschließlich gelöschter Dateien. Insgesamt: 12 unterschiedliche Dateipfade, 15 unterschiedliche Datei-Blobs. Das lokal erzeugte Dokumentations-Commit enthält denselben Dateiinhalt wie der veröffentlichte Dokumentations-Branch.
