@@ -3,3 +3,13 @@ __pycache__/
 .env
 .venv/
 data/
+
+# Local environment files and persistent job histories (also custom data dirs).
+.env.*
+!.env.example
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-*
+*.sqlite3-*
+*.db-*

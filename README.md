@@ -22,7 +22,8 @@ Geplant:
 
 ## Start
 
-Python 3.11 oder neuer, keine zusätzlichen Pakete nötig:
+Linux/macOS (POSIX), Python 3.11 oder neuer, keine zusätzlichen Pakete nötig.
+Windows wird bis zur Umsetzung sicherer ACLs und Prozessbaum-Bereinigung abgewiesen:
 
 ```bash
 export TERMINAL_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -31,6 +32,8 @@ python -m backend.server
 
 Der Server läuft unter `http://127.0.0.1:8765`. Der Token gehört nicht ins Repository.
 Daten: `data/terminal.sqlite3`; mit `TERMINAL_DATA_DIR` anderen dauerhaften Ordner wählen.
+Datenordner erhalten 0700, Datenbanken 0600; vorhandene Rechte werden korrigiert.
+Symlinks, Datenbank-Hardlinks und fremde Eigentümer werden abgewiesen.
 `.env.example` dokumentiert Variablen; die Datei wird nicht automatisch geladen.
 
 ```bash
@@ -54,7 +57,16 @@ Ohne Konfiguration steht nur die Diagnosevorlage bereit.
 `TERMINAL_WORKDIR` bestimmt das Arbeitsverzeichnis des Prozesses.
 
 Der Adapter vergibt keine zusätzlichen Rechte; Prozesse laufen mit den Rechten
-seines Serverkontos. Für Dienst- und Fernbetrieb fehlen noch kontrollierter
+seines Serverkontos. Der API-Token wird aus der Kindprozess-Umgebung entfernt;
+andere Umgebungsvariablen werden weiterhin vererbt. SIGTERM und Strg+C stoppen
+registrierte Prozessgruppen und warten auf die Job-Threads. SIGKILL und Stromausfall
+können nicht abgefangen werden; hierfür ist ein Supervisor erforderlich.
+
+Maximal 16 HTTP-Verbindungen, Backlog 16, zehn Sekunden absolute Frist für Header
+und Body; SSE-Verbindungen haben 150 Sekunden Frist und können über Last-Event-ID
+fortgesetzt werden. Überzählige Verbindungen werden vor dem Threadstart geschlossen.
+
+Für Dienst- und Fernbetrieb fehlen noch kontrollierter
 HTTPS-Zugang, ein geeignetes Dienstkonto, Backup und Aufbewahrungsregeln.
 GitHub Pages allein kann dieses Backend nicht ausführen.
 
@@ -74,3 +86,5 @@ python -m unittest discover -s tests -v
 Nächster Meilenstein: vorhandene Agenten-CLI anschließen und den vollständigen
 Auftragsablauf über eine Weboberfläche bedienen. Vorhandene Office-/Habibis-Dateien
 waren bei dieser Umsetzung nicht verfügbar; ihre Integration bleibt offen.
+
+Sicherheitsänderungen und Prüfung: [docs/security-fixes.md](docs/security-fixes.md).

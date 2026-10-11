@@ -1,17 +1,93 @@
 import hmac
 import json
 import os
+import signal
+import socket
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 from .jobs import Jobs
 
 
+class LimitedHTTPServer(ThreadingHTTPServer):
+    """Bound accepted connections before creating threads, including unauthenticated ones."""
+    request_queue_size = 16
+
+    def __init__(self, address, handler, max_connections=16, request_deadline=10,
+                 stream_deadline=150):
+        self.request_deadline = request_deadline
+        self.stream_deadline = stream_deadline
+        self._slots = threading.BoundedSemaphore(max_connections)
+        self._connections = set()
+        self._connection_lock = threading.Lock()
+        super().__init__(address, handler)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        with self._connection_lock:
+            self._connections.add(request)
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self.release_connection(request)
+            raise
+
+    def release_connection(self, request):
+        with self._connection_lock:
+            self._connections.discard(request)
+        self._slots.release()
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.release_connection(request)
+
+    def server_close(self):
+        with self._connection_lock:
+            for connection in self._connections:
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+        super().server_close()
+
+
 def make_handler(jobs, token):
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
             super().setup()
-            self.connection.settimeout(30)
+            self.connection.settimeout(getattr(self.server, 'request_deadline', 10))
+            self.set_deadline(getattr(self.server, 'request_deadline', 10))
+
+        def set_deadline(self, seconds):
+            if hasattr(self, '_deadline'):
+                self._deadline.cancel()
+            self._deadline = threading.Timer(seconds, self.expire_connection)
+            self._deadline.daemon = True
+            self._deadline.start()
+
+        def expire_connection(self):
+            try:
+                self.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        def finish(self):
+            try:
+                super().finish()
+            finally:
+                self._deadline.cancel()
+
+        def handle(self):
+            try:
+                super().handle()
+            except OSError:
+                # Deadlines and disconnects are expected; do not log request details.
+                pass
 
         def log_message(self, *args):
             pass
@@ -74,6 +150,7 @@ def make_handler(jobs, token):
                     raise ValueError()
             except ValueError:
                 return self.reply(400, {'error': 'Invalid Last-Event-ID'})
+            self.set_deadline(getattr(self.server, 'stream_deadline', 150))
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
             self.send_header('Cache-Control', 'no-store')
@@ -91,7 +168,7 @@ def make_handler(jobs, token):
                     self.wfile.write(b': heartbeat\n\n')
                     self.wfile.flush()
                     time.sleep(0.2)
-            except (BrokenPipeError, ConnectionResetError):
+            except OSError:
                 pass
     return Handler
 
@@ -103,14 +180,22 @@ def main():
     raw = os.environ.get('TERMINAL_AGENT_ARGV', '')
     jobs = Jobs(os.environ.get('TERMINAL_DATA_DIR', 'data'), os.environ.get('TERMINAL_WORKDIR', '.'),
                 json.loads(raw) if raw else None)
-    server = ThreadingHTTPServer(('127.0.0.1', 8765), make_handler(jobs, token))
+    server = None
+    def stop(*_):
+        raise SystemExit(0)
+
+    previous_sigterm = signal.signal(signal.SIGTERM, stop)
     print('Terminal API: http://127.0.0.1:8765', flush=True)
     try:
+        server = LimitedHTTPServer(('127.0.0.1', 8765), make_handler(jobs, token))
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        jobs.close()
+        if server is not None:
+            server.server_close()
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == '__main__':
